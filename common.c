@@ -2,100 +2,94 @@
 
 void putchar(char ch);
 
-static void print_string(const char *s)
-{
-    if (!s)
-        s = "(null)";
-    while (*s)
-        putchar(*s++); // sends each char to the putchar_kernel, so you can see it on screen
-}
-
-static void print_decimal(int v)
-{
-    if (v == 0)
-    {
-        putchar('0');
-        return;
-    }
-
-    unsigned int mag;
-    if (v < 0)
-    {
-        putchar('-');
-        mag = (unsigned int)(-v);
-    }
-    else
-    {
-        mag = (unsigned int)v;
-    }
-
-    char buf[16];
-    int i = 0;
-    while (mag > 0)
-    {
-        buf[i++] = '0' + (mag % 10);
-        mag /= 10;
-    }
-    while (i-- > 0)
-        putchar(buf[i]);
-}
-
-static void print_hex(unsigned int v)
-{
-    const char *digits = "0123456789abcdef";
-    if (v == 0)
-    {
-        putchar('0');
-        return;
-    }
-    char buf[16];
-    int i = 0;
-    while (v > 0)
-    {
-        buf[i++] = digits[v & 0xF];
-        v >>= 4;
-    }
-    while (i-- > 0)
-        putchar(buf[i]);
-}
-
 void printf(const char *fmt, ...)
 {
-    va_list ap;
-    va_start(ap, fmt);
+    va_list vargs;
+    va_start(vargs, fmt);
 
-    for (; *fmt; ++fmt)
+    while (*fmt)
     {
-        if (*fmt != '%')
+        if (*fmt == '%')
+        {
+            fmt++; // Skip '%'
+            switch (*fmt)
+            {          // Read the next character
+            case '\0': // '%' at the end of the format string
+                putchar('%');
+                goto end;
+            case '%': // Print '%'
+                putchar('%');
+                break;
+            case 's':
+            { // Print a NULL-terminated string.
+                const char *s = va_arg(vargs, const char *);
+                while (*s)
+                {
+                    putchar(*s);
+                    s++;
+                }
+                break;
+            }
+            case 'd':
+            { // Print an integer in decimal.
+                int value = va_arg(vargs, int);
+                unsigned magnitude = value; // https://github.com/nuta/operating-system-in-1000-lines/issues/64
+                if (value < 0)
+                {
+                    putchar('-');
+                    magnitude = -magnitude;
+                }
+
+                unsigned divisor = 1;
+                while (magnitude / divisor > 9)
+                    divisor *= 10;
+
+                while (divisor > 0)
+                {
+                    putchar('0' + magnitude / divisor);
+                    magnitude %= divisor;
+                    divisor /= 10;
+                }
+
+                break;
+            }
+            case 'x':
+            { // Print an integer in hexadecimal.
+                unsigned value = va_arg(vargs, unsigned);
+                for (int i = 7; i >= 0; i--)
+                {
+                    unsigned nibble = (value >> (i * 4)) & 0xf;
+                    putchar("0123456789abcdef"[nibble]);
+                }
+            }
+            }
+        }
+        else
         {
             putchar(*fmt);
-            continue;
         }
-        ++fmt;
-        switch (*fmt)
-        {
-        case '%':
-            putchar('%');
-            break;
-        case 'c':
-            putchar((char)va_arg(ap, int));
-            break;
-        case 's':
-            print_string(va_arg(ap, const char *));
-            break;
-        case 'd':
-            print_decimal(va_arg(ap, int));
-            break;
-        case 'x':
-            print_hex(va_arg(ap, unsigned int));
-            break;
-        default:
-            putchar('%');
-            putchar(*fmt);
-            break;
-        }
+
+        fmt++;
     }
 
-    va_end(ap);
+end:
+         va_end(vargs);
+}
+ 
+   
+void *memcpy(void *dst, const void *src, size_t n)
+{
+    uint8_t *d = (uint8_t *)dst;
+    const uint8_t *s = (const uint8_t *)src;
+    while (n--)
+        *d++ = *s++;
+    return dst;
 }
 
+void *memset(void *buf, char c, size_t n)
+{
+    uint8_t *p = (uint8_t *)buf;
+    while (n--)
+        *p++ = c;
+    return buf;
+}
