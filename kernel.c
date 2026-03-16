@@ -3,14 +3,8 @@
 
 extern char __bss[], __bss_end[], __stack_top[];
 extern char __kernel_base[];
+extern char _binary_shell_bin_start[], _binary_shell_bin_size[];
 
-void *memset(void *buf, char c, size_t n)
-{
-    uint8_t *p = (uint8_t *)buf;
-    while (n--)
-        *p++ = c;
-    return buf;
-}
 extern char __free_ram[], __free_ram_end[];
 
 paddr_t alloc_pages(uint32_t n)
@@ -48,9 +42,23 @@ void map_page(uint32_t *table1, uint32_t vaddr, paddr_t paddr, uint32_t flags)
     table0[vpn0] = ((paddr / PAGE_SIZE) << 10) | flags | PAGE_V;
 }
 
+
+
+
 struct process procs[PROCS_MAX];
 
-struct process *create_process(uint32_t pc)
+__attribute__((naked)) void user_entry(void)
+{
+    __asm__ __volatile__(
+        "csrw sepc, %[sepc]        \n"
+        "csrw sstatus, %[sstatus]  \n"
+        "sret                      \n"
+        :
+        : [sepc] "r"(USER_BASE),
+          [sstatus] "r"(SSTATUS_SPIE));
+}
+
+struct process *create_process(const void *image, size_t image_size)
 {
   
     struct process *proc = NULL;
@@ -80,13 +88,30 @@ struct process *create_process(uint32_t pc)
     *--sp = 0;           
     *--sp = 0;            
     *--sp = 0;            
-    *--sp = 0;            
-    *--sp = (uint32_t)pc;
+    *--sp = 0;
+    *--sp = (uint32_t) user_entry;
 
     uint32_t *page_table = (uint32_t *)alloc_pages(1);
+
+    //kernel paging
     for (paddr_t paddr = (paddr_t)__kernel_base;
          paddr < (paddr_t)__free_ram_end; paddr += PAGE_SIZE)
         map_page(page_table, paddr, paddr, PAGE_R | PAGE_W | PAGE_X);
+
+    //user paging
+    for (uint32_t off = 0; off < image_size; off += PAGE_SIZE)
+    {
+        paddr_t page = alloc_pages(1);
+
+        
+        size_t remaining = image_size - off;
+        size_t copy_size = PAGE_SIZE <= remaining ? PAGE_SIZE : remaining;
+
+        // Fill and map the page.
+        memcpy((void *)page, image + off, copy_size);
+        map_page(page_table, USER_BASE + off, page,
+                 PAGE_U | PAGE_R | PAGE_W | PAGE_X);
+    }
 
     proc->pid = i + 1;
     proc->state = PROC_RUNNABLE;
@@ -253,6 +278,7 @@ void kernel_entry(void){
         "sret\n");
 }
 
+
 void handle_trap(struct trap_frame *f)
 {
     uint32_t scause = READ_CSR(scause);
@@ -316,18 +342,18 @@ void proc_b_entry(void){
 
 void kernel_main(void) {
     memset(__bss, 0, (size_t)__bss_end - (size_t)__bss);
-    WRITE_CSR(stvec, (uint32_t) kernel_entry);
+    printf("\n\n");
+    WRITE_CSR(stvec, (uint32_t)kernel_entry);
 
-    idle_proc = create_process((uint32_t)NULL);
-    idle_proc->pid = 0; // idle
+    idle_proc = create_process(NULL, 0); // updated!
+    idle_proc->pid = 0;                  // idle
     current_proc = idle_proc;
 
+    // new!
+    create_process(_binary_shell_bin_start, (size_t)_binary_shell_bin_size);
 
-    printf("HElo world");
-   // proc_a = create_process((uint32_t)proc_a_entry);
-   // proc_b = create_process((uint32_t)proc_b_entry);
-
-    PANIC("Swtiched to idle process!");
+    yield();
+    PANIC("switched to idle process");
 }
 
 __attribute__((section(".text.boot")))
