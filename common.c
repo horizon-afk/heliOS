@@ -33,7 +33,7 @@ void printf(const char *fmt, ...)
             case 'd':
             { // Print an integer in decimal.
                 int value = va_arg(vargs, int);
-                unsigned magnitude = value; // https://github.com/nuta/operating-system-in-1000-lines/issues/64
+                unsigned magnitude = value; 
                 if (value < 0)
                 {
                     putchar('-');
@@ -114,4 +114,23 @@ char *strcpy(char *dst, const char *src)
         *d++ = *src++;
     *d = '\0';
     return dst;
+}
+
+int strlen(const char *str)
+{
+    int i = 0;
+    while (str[i] != '\0')
+        i++;
+    return i;
+}
+
+void strip_spaces(char *dst, const char *src)
+{
+    while (*src)
+    {
+        if (*src != ' ')
+            *dst++ = *src;
+        src++;
+    }
+    *dst = '\0';
 }

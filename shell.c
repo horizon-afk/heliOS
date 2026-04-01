@@ -1,4 +1,5 @@
 #include "user.h"
+#include "math.h"
 
 void main(void)
 {
@@ -36,12 +37,18 @@ void main(void)
                 cmdline[i] = ch;
             }
         }
-        if (strcmp(cmdline, "hello") == 0)
+        char stripped[128];
+        strip_spaces(stripped, cmdline);
+
+        if (strcmp(stripped, "hello") == 0)
             printf("Hello world from shell!\n");
-        else if (strcmp(cmdline, "whoami") == 0)
+        else if (strcmp(stripped, "whoami") == 0)
             printf("This is heliOS OS made for RISC-V :)\n");
-        else if (strcmp(cmdline, "exit") == 0)
+        else if (strcmp(stripped, "exit") == 0)
             exit();
+        else if (is_expr(stripped))
+            printf("%d\n", eval_expr(stripped));
+
         else
             printf("unknown command: %s\n", cmdline);
     }
