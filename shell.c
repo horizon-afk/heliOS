@@ -10,7 +10,6 @@ void main(void)
         for (int i = 0;; i++)
         {
             char ch = getchar();
-            putchar(ch);
             if (i == sizeof(cmdline) - 1)
             {
                 printf("command line too long\n");
@@ -22,14 +21,25 @@ void main(void)
                 cmdline[i] = '\0';
                 break;
             }
+            else if (ch == '\b' || ch == 127)
+            {
+                if (i > 0)
+                {
+                    i--;
+                    printf("\b \b");
+                }
+                i--;
+            }
             else
             {
+                putchar(ch);
                 cmdline[i] = ch;
             }
         }
-
         if (strcmp(cmdline, "hello") == 0)
             printf("Hello world from shell!\n");
+        else if (strcmp(cmdline, "whoami") == 0)
+            printf("This is heliOS OS made for RISC-V :)\n");
         else if (strcmp(cmdline, "exit") == 0)
             exit();
         else
