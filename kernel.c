@@ -235,7 +235,7 @@ __attribute__((naked)) void user_entry(void)
         "sret                      \n"
         :
         : [sepc] "r"(USER_BASE),
-          [sstatus] "r"(SSTATUS_SPIE));
+          [sstatus] "r"(SSTATUS_SPIE | SSTATUS_SUM));
 }
 
 struct process *create_process(const void *image, size_t image_size)
@@ -305,6 +305,103 @@ struct process *create_process(const void *image, size_t image_size)
     return proc;
 }
 
+struct file files[FILES_MAX];
+uint8_t disk[DISK_MAX_SIZE];
+
+int oct2int(char *oct, int len) {
+    int dec = 0;
+    for (int i = 0; i < len; i++) {
+        if (oct[i] < '0' || oct[i] > '7')
+            break;
+
+        dec = dec * 8 + (oct[i] - '0');
+    }
+    return dec;
+}
+
+void fs_init(void) {
+    for (unsigned sector = 0; sector < sizeof(disk) / SECTOR_SIZE; sector++)
+        read_write_disk(&disk[sector * SECTOR_SIZE], sector, false);
+
+    unsigned off = 0;
+    for (int i = 0; i < FILES_MAX; i++) {
+        struct tar_header *header = (struct tar_header *) &disk[off];
+        if (header->name[0] == '\0')
+            break;
+
+        if (strcmp(header->magic, "ustar") != 0)
+            PANIC("invalid tar header: magic=\"%s\"", header->magic);
+
+        int filesz = oct2int(header->size, sizeof(header->size));
+        struct file *file = &files[i];
+        file->in_use = true;
+        strcpy(file->name, header->name);
+        memcpy(file->data, header->data, filesz);
+        file->size = filesz;
+        printf("file: %s, size=%d\n", file->name, file->size);
+
+        off += align_up(sizeof(struct tar_header) + filesz, SECTOR_SIZE);
+    }
+}
+
+void fs_flush(void) {
+    // Copy all file contents into `disk` buffer.
+    memset(disk, 0, sizeof(disk));
+    unsigned off = 0;
+    for (int file_i = 0; file_i < FILES_MAX; file_i++) {
+        struct file *file = &files[file_i];
+        if (!file->in_use)
+            continue;
+
+        struct tar_header *header = (struct tar_header *) &disk[off];
+        memset(header, 0, sizeof(*header));
+        strcpy(header->name, file->name);
+        strcpy(header->mode, "000644");
+        strcpy(header->magic, "ustar");
+        strcpy(header->version, "00");
+        header->type = '0';
+
+        // Turn the file size into an octal string.
+        int filesz = file->size;
+        for (int i = sizeof(header->size); i > 0; i--) {
+            header->size[i - 1] = (filesz % 8) + '0';
+            filesz /= 8;
+        }
+
+        // Calculate the checksum.
+        int checksum = ' ' * sizeof(header->checksum);
+        for (unsigned i = 0; i < sizeof(struct tar_header); i++)
+            checksum += (unsigned char) disk[off + i];
+
+        for (int i = 5; i >= 0; i--) {
+            header->checksum[i] = (checksum % 8) + '0';
+            checksum /= 8;
+        }
+
+        // Copy file data.
+        memcpy(header->data, file->data, file->size);
+        off += align_up(sizeof(struct tar_header) + file->size, SECTOR_SIZE);
+    }
+
+    // Write `disk` buffer into the virtio-blk.
+    for (unsigned sector = 0; sector < sizeof(disk) / SECTOR_SIZE; sector++)
+        read_write_disk(&disk[sector * SECTOR_SIZE], sector, true);
+
+    printf("wrote %d bytes to disk\n", sizeof(disk));
+}
+
+
+struct file *fs_lookup(const char *filename) {
+    for (int i = 0; i < FILES_MAX; i++) {
+        struct file *file = &files[i];
+        if (!strcmp(file->name, filename))
+            return file;
+    }
+
+    return NULL;
+}
+
+
 __attribute__((naked)) void switch_context(uint32_t *prev_sp,
                                            uint32_t *next_sp) {
     __asm__ __volatile__(
@@ -323,7 +420,7 @@ __attribute__((naked)) void switch_context(uint32_t *prev_sp,
         "sw s10, 11 * 4(sp)\n"
         "sw s11, 12 * 4(sp)\n"
 
-        
+
         "sw sp, (a0)\n"         
         "lw sp, (a1)\n"
 
@@ -463,6 +560,8 @@ void kernel_entry(void){
         "sret\n");
 }
 
+
+
 void handle_syscall(struct trap_frame *f)
 {
     switch (f->a3)
@@ -490,7 +589,33 @@ void handle_syscall(struct trap_frame *f)
         current_proc->state = PROC_EXITED;
         yield();
         PANIC("unreachable");
-        
+
+    case SYS_READFILE:
+    case SYS_WRITEFILE: {
+        const char *filename = (const char *) f->a0;
+        char *buf = (char *) f->a1;
+        int len = f->a2;
+        struct file *file = fs_lookup(filename);
+        if (!file) {
+            printf("file not found: %s\n", filename);
+            f->a0 = -1;
+            break;
+        }
+
+        if (len > (int) sizeof(file->data))
+            len = file->size;
+
+        if (f->a3 == SYS_WRITEFILE) {
+            memcpy(file->data, buf, len);
+                file->size = len;
+                fs_flush();
+            } else {
+                memcpy(buf, file->data, len);
+            }
+
+            f->a0 = len;
+            break;
+    }
     default:
         PANIC("unexpected syscall a3=%x\n", f->a3);
     }
@@ -515,7 +640,6 @@ void handle_trap(struct trap_frame *f)
 
     
 }
-
 
 
 void delay(void)
@@ -552,13 +676,7 @@ void kernel_main(void) {
     printf("\n\n");
     WRITE_CSR(stvec, (uint32_t)kernel_entry);
     virtio_blk_init();
-
-    char buf[SECTOR_SIZE];
-    read_write_disk(buf, 0, false /* read from the disk */);
-    printf("first sector: %s\n", buf);
-
-    strcpy(buf, "hello from kernel!!!\n");
-    read_write_disk(buf, 0, true /* write to the disk */);
+    fs_init();
 
     idle_proc = create_process(NULL, 0); // updated!
     idle_proc->pid = 0;                  // idle

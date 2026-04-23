@@ -44,6 +44,14 @@ void main(void)
             printf("Hello world from shell!\n");
         else if (strcmp(stripped, "whoami") == 0)
             printf("This is heliOS OS made for RISC-V :)\n");
+        else if (strcmp(cmdline, "readfile") == 0) {
+            char buf[128];
+            int len = readfile("hello.txt", buf, sizeof(buf));
+            buf[len] = '\0';
+            printf("%s\n", buf);
+        }
+        else if (strcmp(cmdline, "writefile") == 0)
+            writefile("hello.txt", "Hello from shell!\n", 19);
         else if (strcmp(stripped, "exit") == 0)
             exit();
         else if (is_expr(stripped))
